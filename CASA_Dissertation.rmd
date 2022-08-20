@@ -1,0 +1,1176 @@
+---
+title: "Dissertation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Load in libraries
+
+```{r}
+library(sf)
+library(here)
+library(janitor)
+library(tmap)
+library(plyr)
+library(dplyr)
+library(rgdal)
+library(raster)
+library(fpc)
+library(ggplot2)
+library(dbscan)
+library(tidygraph)
+library(igraph)   
+library(tibble)
+library(ggplot2)
+library(units)
+library(osmdata)
+library(rgrass7)
+library(link2GI)
+library(nabor)
+library(matrixStats)
+library(sp)
+library(sfnetworks)
+library(tidyverse)
+library(purrr)
+
+```
+
+
+## Load in  Data
+
+```{r}
+
+
+#----------------------London Boundaries--------------------------
+
+#Merged in qgis
+london_boundary <- st_read(here::here("Data","London_Boundaries","london_Boundary.shp"))%>%
+  clean_names()
+
+boroughs <- st_read(here::here("Data","London_Boundaries","London_Borough_.shp"))%>%
+  st_transform(., 27700)
+
+msoa <- st_read(here::here("Data","London_Boundaries","MSOA_2011_London_gen_MHW.shp"))
+
+
+#----------------------Town centers------------------------------
+
+#read in centres data and add a crs of 27700 (since it was missing)
+Centres <- st_read(here::here("Data", "centres", "Town_Centre_Boundaries.gpkg"))%>%
+  st_set_crs(., 27700)
+
+#check coordinates
+#print(Centres)
+
+#or
+st_crs(Centres)$proj4string
+
+
+#project it locally to BNG
+Centres <- Centres %>%
+  st_transform(.,27700)
+
+
+#----------------------PTAL ------------------------------
+
+
+#read in grid data
+ptalgrid <- st_read(here::here("Data","SHP_PTAL Grid 100m","PTAL_100m_Grid_Cells.shp"))
+
+#plot(ptalgrid)
+
+
+ptalpoint <-  st_read(here::here("Data", "SHP_PTAL Grid 100m","PTAL_100M_Points.shp"))
+
+
+
+#----------------------Services ------------------------------
+
+services <-  st_read(here::here("Data", "services","poi_4544456.gdb"))%>%
+  st_transform(., 27700)
+
+
+#clipping point to london  map boundary
+services <- services[london_boundary,]
+
+
+#----------------------Street network and nodes ------------------------------
+
+streets <- st_read(here::here("Data", "open-roads_4544454", "TQ_RoadLink.shp"))%>%
+  st_transform(.,27700)
+
+
+#clip street to london boundary
+streets <-  streets[london_boundary,]
+
+#clip street to london boundary
+street_nodes <- st_read(here::here("Data", "open-roads_4544454", "TQ_RoadNode.shp"))%>%
+  st_transform(.,27700)
+
+#clip nodes to london boundary
+street_nodes <-  street_nodes[london_boundary,]
+
+
+#-----------------lsoa population ----------------------
+
+#load lsoa data
+lsoa <- st_read(here::here("Data","population_lsoa","Lower_Layer_Super_Output_Areas_(December_2011)_Boundaries_Generalised_Clipped_(BGC)_EW_V3", "Lower_Layer_Super_Output_Areas_(December_2011)_Boundaries_Generalised_Clipped_(BGC)_EW_V3.shp"))
+
+#-----lsoa-----
+
+#load london boundary
+london_boundary <- st_read(here::here("Data","London_Boundaries","london_Boundary.shp"))%>%
+  clean_names()
+
+
+#clipping lsoa to london  map boundary
+lsoa_london <- st_intersection(lsoa, london_boundary) #4969
+
+
+#write out lsoa
+#st_write(lsoa_london, ".\\Data\\London_Boundaries\\lsoa_london_.shp")
+
+
+#-----population-----
+
+#read in lsoa population of london
+#source: https://data.london.gov.uk/dataset/lsoa-atlas 
+# pop <- read.csv(here::here("Data","population_lsoa","lsoa-data.csv"))%>%
+#   clean_names()
+
+
+#read in new pop  https://geoportal.statistics.gov.uk/datasets/ons::lower-layer-super-output-areas-december-2011-boundaries-super-generalised-clipped-bsc-ew-v3/about
+pop <- read.csv(here::here("Data","population_lsoa","population_2020_lsoa.csv"))%>%
+  clean_names()
+
+#join pop data to lsoa_london based on LSOA11NM
+lsoa_pop <- lsoa_london %>%
+  left_join(.,
+            pop,
+            by =c("LSOA11CD" = "lsoa_code"), .keep_all = TRUE)
+  
+
+#add col on pop density
+lsoa_pop <- lsoa_pop%>%
+  mutate(population_density = lsoa_pop$population / lsoa_pop$Shape__Are)
+
+
+# #write out (part 2)
+st_write(lsoa_pop, ".\\Data\\London_Boundaries\\lsoa_pop.gpkg",  delete_dsn = T)
+
+
+#--------open space---------------
+
+#clip open space to london boundary
+
+
+open_space <- st_read(here::here("Data","Open_space","GiGL_OpenSpace_Sites_Full_region.shp"))%>%
+  clean_names()%>%
+  dplyr::select(c("borough","area_ha","primary_use"))%>%
+  dplyr::rename(os_borough = borough)%>%
+  dplyr::rename(os_area_ha = area_ha)%>%
+  dplyr::rename(os_primary_use= primary_use)%>%
+  add_column(open_space = "yes") 
+
+
+#clip to london boundary
+open_space <-  open_space[london_boundary,]
+
+
+
+```
+
+
+
+## Setting up the data per borough
+
+```{r}
+
+
+
+## loop over all boroughs:
+
+x = unique(boroughs$NAME)
+#x
+
+
+for(b in x) {
+  
+# for(b in unique(boroughs$NAME)) {
+  
+  
+#-------------boroughs--------------------- 
+  
+  
+##subset only that borough.
+  df.b = boroughs[boroughs$NAME==b,]
+# construct a file name like df_barking.gpkg and save this data:
+  file.name = paste(".\\loop\\dataframes\\df_",b,".gpkg",sep="")
+#fix the file path below
+  st_write(df.b,file.name)
+
+   
+  
+# -------------services---------------------
+# 
+##clipping services to each borough  map boundary
+  services.b <- services[df.b,]
+# construct a file name like services_barking.gpkg and save this data:
+  file.name_services = paste(".\\loop\\services\\services_",b,".gpkg",sep="")
+#fix thefile path below
+  st_write(services.b,file.name_services,  delete_dsn = T)
+
+# #-------------streets---------------------
+#   
+##clipping streets to each borough  map boundary
+  streets.b <- st_intersection(streets,df.b)
+## construct a file name like streets_barking.gpkg and save this data:
+  file.name_streets = paste(".\\loop\\streets\\streets_",b,".gpkg",sep="")
+##fix thefile path below
+  st_write(streets.b,file.name_streets, delete_dsn = T)
+
+
+# #
+# #-------------PTAL point --------------------
+#
+##clipping ptal points to each borough  map boundary
+  ptal.b <- st_intersection(ptalpoint,df.b)
+## construct a file name like ptalpoint_barking.gpkg and save this data:
+  file.name_ptalpoint = paste(".\\loop\\ptal_point\\PTAL_point_",b,".gpkg",sep="")
+##fix thefile path below
+  st_write(ptal.b,file.name_ptalpoint, delete_dsn = T)
+#  
+# -------------PTAL grid -------------------- 
+  
+##clipping ptal grid to each borough  map boundary
+  ptal_grid.b <- st_intersection(ptalgrid,df.b)
+## construct a file name like ptalgrid_barking.gpkg and save this data:
+  file.name_ptalgrid = paste(".\\loop\\ptal_grid\\PTAL_grid_",b,".gpkg",sep="")
+##fix thefile path below
+  st_write(ptal_grid.b,file.name_ptalgrid, delete_dsn = T)
+
+
+
+#-------------lsoa pop --------------------
+#
+##clipping lsoa pop to each borough  map boundary
+  lsoa_pop.b <- lsoa_pop[df.b,]
+## construct a file name like lsoa_barking.gpkg and save this data:
+  file.name_lsoa_pop = paste(".\\loop\\lsoa_pop\\lsoa_pop_",b,".gpkg",sep="")
+##fix thefile path below
+  st_write(lsoa_pop.b,file.name_lsoa_pop, delete_dsn = T)
+
+
+#-------------centers --------------------
+
+#clipping  to each borough  map boundary
+centres.b <- st_intersection(Centres,df.b)
+#construct a file name like centers_barking.gpkg and save this data:
+file.name_centers = paste(".\\loop\\centers\\centers_",b,".gpkg",sep="")
+#fix thefile path below
+st_write(centres.b,file.name_centers, delete_dsn = T)
+
+
+
+#-------------open space--------------------
+
+##clipping lsoa pop to each borough  map boundary
+  os.b <- open_space[df.b,]
+## construct a file name like lsoa_barking.gpkg and save this data:
+  file.name_os = paste(".\\loop\\os\\os_",b,".gpkg",sep="")
+##fix thefile path below
+  st_write(os.b,file.name_os, delete_dsn = T)
+
+}  
+
+```
+
+
+## Filtered services, clustering per borough
+
+loop over each borough:
+-filter and re-classify services
+-clustering services
+
+
+```{r}
+x = unique(boroughs$NAME)
+#for(a in x )
+
+for(a in c("Kensington and Chelsea") ) {
+  
+  
+##load in services data
+  services  <- st_read(here::here("loop","services",paste("services_",a,".gpkg",sep="")))
+  
+  
+#----------filtered service -------------- 
+    
+  # Step 1: filter out the POI values that do not apply
+  #1st LEVEL : 206313 SERVICES
+  filtered_services <-  services %>%
+    dplyr:: select(c('ref_no', 'groupname', 'categoryname', 'classname','feature_easting', 'feature_northing')) %>%
+    filter(groupname != "Commercial Services", groupname != "Manufacturing and Production")
+  
+  #2ND LEVEL: 181657 SERVICES
+  filtered_services_02 <-  filtered_services %>%
+    filter(categoryname != "Accommodation",categoryname != "Animal Welfare",categoryname !="Education Support Services",categoryname !="Health Support Services", categoryname != "Central and Local Government", categoryname !="Organisations",categoryname != "Motoring",categoryname != "Air",categoryname != "Road and Rail",categoryname != "Walking",categoryname != "Water", )
+  
+  #3RD LEVEL: 145423 SERVICES
+  filtered_services_03 <- filtered_services_02 %>%
+    filter(classname != "Allotments", classname != "Cemeteries and Crematoria",classname !="Drinking Fountains and Water Points",classname !="Electrical Features",classname !="Gas Features", classname !="Letter Boxes",classname !="Meteorological Features",classname !="Public Toilets", classname !="Recycling Centres",classname !="Refuse Disposal Facilities", classname !="Telecommunications Companies",classname !="Telecommunications Features", classname !="Utility Companies and Brokers", classname !="Waste Storage, Processing and Disposal", classname != "Wifi Hotspots", classname != "Hail and Ride Zones",  classname !="London Underground Entrances", classname !="Taxi Ranks")
+    
+  
+  
+  # Step 2: Re-classify them based on Moreno's classification
+  
+  filtered_services_03$new_services <- ifelse(filtered_services_03$groupname == "Attractions" | filtered_services_03$groupname == "Sport and Entertainment" | filtered_services_03$categoryname == "Eating and Drinking" | filtered_services_03$classname == "Places Of Worship", 'Enjoying',
+                                              ifelse(filtered_services_03$categoryname == "Health Practitioners and Establishments","Caring",
+                                                     ifelse(filtered_services_03$categoryname == "Primary, Secondary and Tertiary Education" | filtered_services_03$categoryname == "Recreational and Vocational Education" | filtered_services_03$classname == "Libraries","Learning",
+                                                            ifelse(filtered_services_03$categoryname == "Clothing and Accessories" | filtered_services_03$categoryname == "Food, Drink and Multi Item Retail" |filtered_services_03$categoryname == "Household, Office, Leisure and Garden" ,"Supplying",
+                                                                   ifelse(filtered_services_03$classname == "Halls and Community Centres"| filtered_services_03$classname == "Bus Stops" | filtered_services_03$classname == "Bus and Coach Stations, Depots and Companies" | filtered_services_03$classname == "Railway Stations, Junctions and Halts" | filtered_services_03$classname == "Tram, Metro and Light Railway Stations and Stops" | filtered_services_03$classname == "Underground Network Stations","Living", "other")))))
+  
+  
+    
+  #--------------clustring----------------
+  
+  #create a sp object
+  filtered_services_03_sp<- filtered_services_03 %>%
+    as(., 'Spatial')
+  
+  
+  #extract the points from the spatial points data frame
+  filtered_services_03_Points <- filtered_services_03_sp %>%
+    coordinates(.)%>%
+    as.data.frame()
+  
+  # used to find suitable eps value based on the knee in plot (not applicable here)
+  filtered_services_03_Points%>%
+    dbscan::kNNdistplot(.,k=5)
+
+  
+  #run the dbscan analysis
+  db <- filtered_services_03_Points %>%
+    fpc::dbscan(.,eps = 100, MinPts = 5)
+  
+  
+    
+  #add clusters back in to the origin datafram (preserving other info)
+  filtered_services_03<- filtered_services_03 %>%
+    mutate(dbcluster=db$cluster)
+  
+  
+  ##add columns for each service
+  filtered_services_04 <- ddply(filtered_services_03,.(dbcluster,new_services), transform, total_count = length(dbcluster)) 
+    
+  
+  filtered_services_04 <- filtered_services_04 %>% 
+    mutate(caring = ifelse(filtered_services_04$new_services == "Caring", filtered_services_04$total_count, 0))%>%
+    mutate(enjoying = ifelse(filtered_services_04$new_services == "Enjoying", filtered_services_04$total_count, 0))%>%
+    mutate(learning = ifelse(filtered_services_04$new_services == "Learning", filtered_services_04$total_count, 0))%>%
+    mutate(living = ifelse(filtered_services_04$new_services == "Living", filtered_services_04$total_count, 0))%>%
+    mutate(supplying = ifelse(filtered_services_04$new_services == "Supplying", filtered_services_04$total_count, 0))
+    
+  
+  #subset caring df
+  caring_df <-  subset(filtered_services_04, caring > 0)%>%
+    dplyr:::group_by(dbcluster,caring)%>%
+    dplyr::summarise(caring = n())
+  
+  ##subset enjoying df
+  enjoying_df <-  subset(filtered_services_04, enjoying > 0)%>%
+    dplyr::group_by(dbcluster,enjoying)%>%
+    dplyr::summarise(enjoying = n())
+  
+  ##subset learning df
+  learning_df <-  subset(filtered_services_04, learning > 0)%>%
+    dplyr:::group_by(dbcluster,learning)%>%
+    dplyr::summarise(learning = n())
+  
+  
+  ##subset living df
+  living_df <-  subset(filtered_services_04, living > 0)%>%
+    dplyr:::group_by(dbcluster,living)%>%
+    dplyr::summarise(living = n())
+  
+  ##subset supplying df
+  supplying_df <-  subset(filtered_services_04, supplying > 0)%>%
+    dplyr:::group_by(dbcluster,supplying)%>%
+    dplyr::summarise(supplying = n())
+  
+  
+  
+  #------join all back together based on dbcluster field----------------------------------
+  
+  
+  #join caring and enjoying
+  car_enj <- merge(x = caring_df, y = enjoying_df, all = TRUE)
+  
+  #join caring, enjoying and learning
+  car_enj_lear <- merge(x = car_enj, y = learning_df, all = TRUE)
+  
+  #join caring, enjoying, learning and living
+  car_enj_lear_liv <- merge(x = car_enj_lear, y = living_df, all = TRUE)
+  
+    
+  #join caring, enjoying, learning ,living and supplying
+  car_enj_lear_liv_sup<- merge(x = car_enj_lear_liv, y = supplying_df, all = TRUE)
+  
+  
+  #change all na values to 0
+  car_enj_lear_liv_sup[is.na(car_enj_lear_liv_sup)] = 0
+  
+  
+  #check diversity of services offered per cluster
+  car_enj_lear_liv_sup <- car_enj_lear_liv_sup%>%
+    mutate(serviced_diversity = rowSums(car_enj_lear_liv_sup[,-1] > 0))
+    
+  
+  
+  #-------------------------------Centroid to each cluster------------------------------
+  
+  
+  #group by the cluster, find the sum of coordinates and divide by the number of points in each cluster
+  cluster_centroid_1 <- filtered_services_03%>%
+    group_by(dbcluster)%>%
+    dplyr::summarise(sum_x1 = sum(feature_easting), sum_x2= sum(feature_northing),count_clusters = n())%>%
+    mutate(cluster_centroid_x1= sum_x1/count_clusters)%>%
+    mutate(cluster_centroid_x2= sum_x2/count_clusters)
+    
+  
+  ##join cluster_centroid_1 to car_enj_lear_liv_sup
+  cluster_centroid_services <- merge(x = cluster_centroid_1, y = car_enj_lear_liv_sup, all = TRUE)%>%
+    dplyr:: select(c('dbcluster',"count_clusters","cluster_centroid_x1", "cluster_centroid_x2", "caring","enjoying", "learning", "living", "supplying", "serviced_diversity"))
+    
+    
+  #joining the clusters data to the town centers data-
+  
+  ##overlay ceters to point data
+  centroids_TC <- st_intersection(cluster_centroid_services, Centres)%>%
+    dplyr::select(c("dbcluster","count_clusters","classification","hectares"))%>%
+    st_drop_geometry()
+  
+  
+  ##left join the overlayed layers to the original dataframe
+  cluster_centroid_services_02 <- cluster_centroid_services%>%
+    clean_names() %>%
+    left_join(., 
+              centroids_TC,
+              by = c("dbcluster" = "dbcluster"))
+  
+  ##drop 0 clusters and rename columns
+  cluster_centroid_services_02 <- cluster_centroid_services_02[!(cluster_centroid_services_02$dbcluster==0),]%>%
+    dplyr::rename(town_center_size_ha = hectares)
+  
+  
+  ##drop geometry to only have the cluster centroid points.
+  cluster_centroid_services_no_geom <- cluster_centroid_services_02%>%
+    st_drop_geometry()
+  
+  ##create geometry field with 2 fields
+  cluster_centroid_services <- cluster_centroid_services_no_geom%>%
+    st_as_sf(coords = c('cluster_centroid_x1', 'cluster_centroid_x2'))%>%
+    st_set_crs(., 27700)
+  
+
+  #write out
+  st_write(cluster_centroid_services,paste(".\\loop\\clustered_services_centroid_100\\",a,".gpkg",sep=""), delete_dsn = T)
+  
+  
+  
+  #write out
+  st_write(cluster_centroid_services_02,paste(".\\loop\\clustered_services_100\\",a,".gpkg",sep=""), delete_dsn = T) 
+  
+}
+  
+  
+  
+```
+
+
+
+## 15 minute city analysis
+
+loop over each borough:
+-clean and set up the network
+-blend points on to the network
+-proximity, diversity, density measures
+
+```{r}
+
+
+#---------------------------------cleans and sets up the graph----------------------------------------  
+
+
+
+#x = unique(boroughs$NAME)
+#x
+
+#for(c in x[1:2]) 
+#for(c in c("City of London")) 
+#for(c in x)
+
+
+## loop over all boroughs:
+for(c in c("Tower Hamlets", "Wandsworth", "Westminster"))   {
+
+  #------------------------load in the data for each borough----------------------------------
+                                                                                                                        
+  street <- st_read(here::here("loop","streets",paste("streets_",c,".gpkg",sep="")))
+  
+  street_ls = st_cast(street, "LINESTRING")
+  
+  
+  sites <- st_read(here::here("loop","ptal_point", paste("PTAL_point_",c,".gpkg",sep="")))
+  
+  
+  facility  <- st_read(here::here("loop","clustered_services_centroid_100",paste(c,".gpkg",sep="")))
+  
+  
+  lsoa_pop <- st_read(here::here("loop","lsoa_pop", paste("lsoa_pop_",c,".gpkg",sep="")))
+  
+  #os <- st_read(here::here("loop","os", paste("os_",c,".gpkg",sep=""))) 
+  
+  #------------------------cleans and sets up the graph----------------------------------
+
+    
+  #add a column with edge id
+  edges <- street_ls %>%
+    dplyr::mutate(edgeID = c(1:n()))%>%
+    dplyr::select(c("function.","geom","edgeID"))
+    
+  #Create nodes at the start and end point of each edge, #give each node a unique index 
+  nodes <- edges %>%
+    st_coordinates() %>%
+    as_tibble() %>%
+    dplyr::rename(edgeID = L1) %>%
+    group_by(edgeID) %>%
+    slice(c(1, n())) %>%
+    ungroup() %>%
+    dplyr::mutate(start_end = rep(c('start', 'end'), times = n()/2)) %>%
+    dplyr::mutate(xy = paste(.$X, .$Y)) %>% 
+    dplyr::mutate(nodeID = group_indices(., factor(xy, levels = unique(xy)))) %>%
+    dplyr::select(-xy)
+    
+  #specify for each edge, in which node it starts, and in which node it ends.
+  source_nodes <- nodes %>%
+    filter(start_end == 'start') %>%
+    pull(nodeID)
+  
+  target_nodes <- nodes %>%
+    filter(start_end == 'end') %>%
+    pull(nodeID)
+  
+  edges = edges %>%
+    mutate(from = source_nodes, to = target_nodes)
+    
+  #re_order datframe columns
+  edges <- edges[, c("to", "from", "function.", "edgeID", "geom")]
+    
+    
+  #Remove duplicate nodes
+  nodes <- nodes %>%
+    distinct(nodeID, .keep_all = TRUE) %>%
+    dplyr::select(-c(edgeID, start_end)) %>%
+    st_as_sf(coords = c('X', 'Y')) %>%
+    st_set_crs(st_crs(edges))
+    
+  
+    
+  #-----------------------Create my network: sfnetwork -------------------------------
+    
+  #create network and add weights based on length  
+  net = sfnetwork(nodes, edges, directed = FALSE) %>%
+    activate("edges") %>%
+    mutate(weight = edge_length())
+  
+  #make it one component
+  with_graph(net, graph_component_count())
+  
+  connected_net = net %>%
+    activate("nodes") %>%
+    filter(group_components() == 1)
+  
+  connected_net  
+  net <- connected_net
+  
+  rm(connected_net)
+  
+  
+  
+  #--------------------Blend points to Network------------------
+  
+  #convert to geometry collection
+  sites_geom<-st_geometry(sites)
+  facility_geom<-st_geometry(facility)  #to convert back : #facility = st_sf(geom=facility_geom)
+  
+  
+  # Blend the sites and facilities into the network to get better results. 
+  new_net = net %>%
+    st_network_blend(c(sites_geom, facility_geom))
+  
+  
+  
+  #--------------------Cost Matrix: new_net ----------------------
+  
+  # By default the "weight" (length) column in edge data of the network is used for edge weights.
+  cost_matrix = st_network_cost(new_net, from = sites_geom, to = facility_geom)
+  
+  #make it a df
+  cost_matrix_dataframe = as.data.frame(cost_matrix)
+  
+  #add columns that calcs the min distance of each row (min distance from orig to destination)
+  cost_matrix_dataframe$min_distance = rowMins(as.matrix(cost_matrix_dataframe[,c(1:ncol(cost_matrix_dataframe))]))
+    
+  #extract min distance column
+  min_distance_od <-  cost_matrix_dataframe[ , ncol(cost_matrix_dataframe),drop = FALSE]
+
+  # Find for each site which facility is closest. 
+  closest = facility_geom[apply(cost_matrix, 1, function(x) which(x == min(x))[1])]
+  
+  #view as an sf
+  closest_sf = st_sf(geom=closest)
+  
+  draw_lines = function(sources, targets) {
+  lines = mapply(
+    function(a, b) st_sfc(st_cast(c(a, b), "LINESTRING"), crs = st_crs(net)),
+    sources,
+    targets,
+    SIMPLIFY = FALSE
+  )
+  do.call("c", lines)
+  }
+  #source is sites target is closest 
+  connections = draw_lines(sites_geom, closest)
+  connections_sf = st_sf(geom=connections) #can i add distance of that connectionbased on network?
+  
+  
+  
+  #join all the below
+  
+  #min_distance_od    : shows min distance from orig to destination
+  #closest_sf         : show coordinates of destination points that each origin connects to
+  #facility           : origin data of facilities 
+  #connections_sf     : connection of all origin geometry to destination geometry  
+  #sites              : show coordinates of origin points
+  
+  
+  
+  #1. join connection_sf with #closest_sf 
+  
+  #rename +add columnn id's
+  connections_sf <-  connections_sf%>%
+    dplyr::mutate(connection_id= 1:n()) %>%
+    dplyr::mutate(connection_coords = geom)  %>%
+    st_drop_geometry()
+    
+  
+  closest_sf <-  closest_sf %>% 
+    dplyr::mutate(destination_coords_id= 1:n()) %>%
+    dplyr::mutate(destination_coords = geom)%>%
+    st_drop_geometry()
+  
+  join_1 <- left_join(connections_sf, 
+              closest_sf,
+              by = c("connection_id" = "destination_coords_id"))
+  
+  
+  #2. join to sites
+  
+  sites <- sites %>%
+    dplyr::mutate(origin_coords =geom) %>%
+    dplyr::mutate(sites_id= 1:n()) %>%
+    dplyr::select( c("sites_id","X","Y","PTAL2021","geom","origin_coords"))
+    
+  join_2 <- left_join(sites, 
+              join_1,
+              by = c("sites_id" = "connection_id")) 
+  
+  
+  #3. join to min_distance_od
+  
+  min_distance_od <- min_distance_od %>%
+    dplyr::mutate(min_distance_od_id= 1:n()) %>%
+    dplyr::rename(connection_min_distance = min_distance)
+    
+  
+  join_3 <- left_join(join_2, 
+              min_distance_od,
+              by = c("sites_id" = "min_distance_od_id")) 
+    
+  
+  facility <- facility %>%
+    dplyr::mutate(facility_dest_coords = geom) %>%
+    st_drop_geometry()
+    
+  
+  #this join has all the data of the origins and destinations, connection distance
+  join_4 <- left_join(join_3, 
+              facility,
+              by = c("destination_coords" = "facility_dest_coords" ), keep = TRUE) 
+    
+
+
+  
+  
+  #read is ptal grid
+  PTALgrid <- st_read(here::here("loop","ptal_grid", paste("PTAL_grid_",c,".gpkg",sep="")))
+  
+  
+  #st join "join_4" with "PTALgrid_london"
+  ptalgrid_final_ <-  st_join(PTALgrid, join_4, largest = TRUE)
+  
+  
+  
+ #------Diversity calculation -------------- 
+  
+  
+  #add column for functional completness 
+  ptalgrid_final_ <-  ptalgrid_final_ %>%
+  dplyr::mutate(func_comp =(caring/5) +(enjoying/5) + (learning/5) + (living/5) + (supplying/5))
+  
+  
+  #add a column for shannons entropy
+  
+  
+#------add population density to the dataset--------------
+  
+##spatially join lsoa to ptal values, keeping only largest overlap
+  ptalgrid_final_ <- st_join(ptalgrid_final_, lsoa_pop,largest = TRUE)%>%
+    drop_na(population_density_persons_per_hectare_2013)%>%
+    dplyr::rename(pop_den_ppl_hec = population_density_persons_per_hectare_2013)%>%
+    dplyr::rename(pop_den_area_hec  = population_density_area_hectares)%>%
+    dplyr::rename(pop_est = population_estimates_2013)%>%
+    clean_names()
+  
+
+#------add open space to the dataset--------------
+##
+  #ptalgrid_final_ <- st_join(ptalgrid_final_, os,largest = TRUE)%>%
+
+  #write out
+  st_write(ptalgrid_final_,paste(".\\loop\\final_output\\",c,".gpkg",sep=""), delete_dsn = T)
+  
+  #remove objects before next loop
+  rm(ptalgrid_final_)
+  rm(join_4)
+  rm(join_3)
+  rm(facility)
+  rm(min_distance_od)
+  rm(min_distance)
+  rm(sites)
+  rm(join_2)
+  rm(join_1)
+  rm(closest_sf)
+  rm(closest)
+  rm(connections_sf)
+  rm(connections)
+  rm(cost_matrix_dataframe)
+  rm(cost_matrix)
+  rm(new_net)
+  rm(sites_geom)
+  rm(facility_geom)
+  rm(connected_net)
+  rm(net)
+  rm(nodes)
+  rm(edges)
+  rm(target_nodes)
+  rm(source_nodes)
+  rm(street)
+  rm(street_ls)
+  
+}
+
+#camden <- st_read(here::here("loop","final_output","Camden.gpkg"))
+
+#Barnet <- st_read(here::here("loop","final_output","Barnet.gpkg"))
+
+
+#C:\Users\loubn\OneDrive - University College London\Dissertation\007 Working Data and #Code\CASA_Dissertation\loop\final_output
+
+```
+
+
+
+
+## Combine individual borough dataframes in to one dataframe
+
+
+```{r}
+baseDir <- ".\\loop\\final_output\\"
+
+
+filenames <- c("Barking and Dagenham.gpkg ","Barnet.gpkg","Bexley.gpkg","Brent.gpkg",'Bromley.gpkg', "City of London.gpkg", "Camden.gpkg","Ealing.gpkg","Enfield.gpkg","Greenwich.gpkg","Hackney.gpkg","Hammersmith and Fulham.gpkg","Haringey.gpkg","Harrow.gpkg","Havering.gpkg","Hillingdon.gpkg","Hounslow.gpkg","Islington.gpkg","Kensington and Chelsea.gpkg","Lambeth.gpkg","Lewisham.gpkg","Merton.gpkg","Newham.gpkg","Redbridge.gpkg","Richmond upon Thames.gpkg","Southwark.gpkg","Sutton.gpkg","Tower Hamlets.gpkg","Waltham Forest.gpkg","Wandsworth.gpkg","Westminster.gpkg","Kingston upon Thames.gpkg","Croydon.gpkg") 
+ 
+
+filepaths <- paste(baseDir, filenames, sep='')
+
+# Read each shapefile and return a list of sf objects
+listOfGpkg <- lapply(filepaths, st_read)
+
+# Look to make sure they're all in the same CRS
+unique(sapply(listOfGpkg, crs))
+
+# Combine the list of sf objects into a single object
+combinedGpkg <- do.call(what = sf:::rbind.sf, args=listOfGpkg)
+
+#write out
+#st_write(combinedGpkg, ".\\loop\\final_output\\London_final_dataset.gpkg")          
+
+
+#----------clean------------------
+
+#select only the columns we want to keep
+London_final_dataset <- combinedGpkg %>%
+  dplyr::select("id","name","ptal2021","connection_min_distance","count_clusters_x","caring","enjoying","learning","living","supplying","serviced_diversity","classification","town_center_size_ha","func_comp","lsoa11nm","pop_den_area_hec","pop_den_ppl_hec","shape_area")%>%
+  dplyr::rename(grid_area = shape_area)
+
+
+#drop na values
+London_final_dataset <- London_final_dataset %>% 
+  drop_na(c("caring","enjoying", "learning","living","supplying"))
+
+
+#-----------spatially join with wards to have a finer grain of analysis------------
+
+#read in wards
+london_wards <- st_read(here::here("Data","London_Boundaries","London_Ward.shp"))%>%
+  clean_names()%>%
+  dplyr::select("name", "gss_code","hectares","borough")%>%
+  dplyr::rename(ward_name =name)%>%
+  dplyr::rename(ward_hectares =hectares)%>%
+  st_set_crs(., 27700)
+  
+#spatially join London_final_dataset to london wards
+London_final_dataset <- st_join(London_final_dataset, london_wards,largest = TRUE)%>%
+  drop_na(connection_min_distance)
+  
+
+
+
+
+```
+
+
+## Scoring
+
+```{r}
+
+#---------------scoring--------------------------------
+
+
+#diversity scoring: add a column 
+London_final_dataset$diversityscore <- ifelse(London_final_dataset$serviced_diversity == 0, 0,
+                  ifelse(London_final_dataset$serviced_diversity == 1 , 0.2,
+                         ifelse(London_final_dataset$serviced_diversity == 2, 0.4,
+                                ifelse(London_final_dataset$serviced_diversity == 3, 0.6,
+                                       ifelse(London_final_dataset$serviced_diversity == 4, 0.8,
+                                              ifelse(London_final_dataset$serviced_diversity == 5, 1, 100))))))
+  
+
+
+#proximity score
+London_final_dataset$proximityscore <- ifelse(London_final_dataset$connection_min_distance >= 0 & London_final_dataset$connection_min_distance <= 400, 1,
+                                              ifelse(London_final_dataset$connection_min_distance > 400 & London_final_dataset$connection_min_distance <= 800, 0.8,
+                                                     ifelse(London_final_dataset$connection_min_distance > 800 & London_final_dataset$connection_min_distance <= 1200, 0.6,
+                                                            ifelse(London_final_dataset$connection_min_distance > 1200 & London_final_dataset$connection_min_distance <= 1600, 0.4,
+                                                                   ifelse(London_final_dataset$connection_min_distance > 1600 & London_final_dataset$connection_min_distance <= 2000, 0.2,
+                                                                          ifelse(London_final_dataset$connection_min_distance > 2000, 0, 100))))))
+                                              
+
+#combine scores
+
+London_final_dataset <- London_final_dataset%>%
+  mutate(combined_score = diversityscore + proximityscore)
+
+#London_final_dataset$combined_score <-rowSums(London_final_dataset[, c("proximityscore", "diversityscore")]) 
+#London_final_dataset$diversityscore <- as.numeric(London_final_dataset$diversityscore)
+
+ 
+#write it out
+st_write(London_final_dataset,paste(".\\Output_data\\London\\London_final_dataset.gpkg"),delete_dsn = T)  
+  
+
+#write out csv
+write.csv(London_final_dataset, ".\\Output_data\\London\\London_final_dataset.csv")
+
+
+```
+
+
+## Charts
+- median no. of services by borough/ward
+
+```{r}
+#---------------------median no. of services by borough--------------------------------------
+
+
+#group by borough and find median value for each of the 5 services
+median_no_services <- London_final_dataset%>%
+  dplyr::group_by(name)%>%
+  dplyr::summarise(med_caring = median(caring), med_enjoying= median(enjoying),med_learning = median(learning),med_living = median(living),med_supplying = median(supplying), med_div_score = median(diversityscore), med_prox_score = median(proximityscore), med_total_score = median(combined_score))%>%
+  st_drop_geometry()
+
+
+#or group by ward gss code
+median_no_services_ward <- London_final_dataset%>%
+  dplyr::group_by(gss_code)%>%
+  dplyr::summarise( med_caring = median(caring), med_enjoying= median(enjoying),med_learning = median(learning),med_living = median(living),med_supplying = median(supplying), med_div_score = median(diversityscore), med_prox_score = median(proximityscore), med_total_score = median(combined_score))%>%
+  st_drop_geometry()
+
+london_wards_2 <- london_wards%>%
+  mutate(ward_name2 = ward_name)
+  
+#join to ward dataset to ge tthe boroughs and ward names with it
+median_no_services_ward <- median_no_services_ward %>%
+  left_join(.,
+            london_wards_2,
+            by =c("gss_code" = "gss_code"), .keep_all = TRUE)
+
+
+#write out
+#write.csv(median_no_services, ".\\Output_data\\datasets\\median_no_services_borough.csv")
+#write.csv(median_no_services_ward, ".\\Output_data\\datasets\\median_no_services_ward.csv")
+
+
+
+
+#--------------- % of each walking bracket per borough ------------------
+
+#first read in OS dataset
+
+open_space_wards <- read.csv(here::here("Data","Open_space","access-public-open-space-ward.csv"))%>%
+  clean_names()%>%
+  select(c("ward_gss_code","ward_name","borough_name","total_area_of_ward_sq_m","all_open_space","open_space_with_access"))
+
+#change character type to numeric
+open_space_wards$total_area_of_ward_sq_m <- as.numeric(open_space_wards$total_area_of_ward_sq_m)  
+open_space_wards$all_open_space <- as.numeric(open_space_wards$all_open_space)  
+
+#os per borough
+open_space_borough <- open_space_wards%>%
+  group_by(borough_name)%>%
+  summarise(os_area = sum(all_open_space), borough_area =sum(total_area_of_ward_sq_m))
+
+
+
+
+#------------by borough-----------------------
+
+
+#area of land (m2) per borough that within 5 mins walk
+prox_5mins <- London_final_dataset%>%
+  filter(connection_min_distance <= 400) %>% 
+  dplyr::group_by(name)%>%
+  dplyr::summarise(five_min_area = sum(grid_area),count_5m =n())%>%
+  st_drop_geometry()
+
+#area of land (m2) per borough that within 10 mins walk
+prox_10mins <- London_final_dataset
+prox_10mins <- filter(prox_10mins, connection_min_distance > 400 & connection_min_distance <= 800) %>% 
+  dplyr::group_by(name)%>%
+  dplyr::summarise(ten_min_area = sum(grid_area),count_10m =n())%>%
+  st_drop_geometry()
+
+
+#area of land (m2) per borough that within 15 mins walk
+prox_15mins <- London_final_dataset
+prox_15mins <- filter(prox_15mins, connection_min_distance > 800 & connection_min_distance <= 1200) %>% 
+  dplyr::group_by(name)%>%
+  dplyr::summarise(fifteen_min_area = sum(grid_area),count_15m =n())%>%
+  st_drop_geometry()
+
+
+#area of land (m2) per borough that within 20 mins walk
+prox_20mins <- London_final_dataset
+prox_20mins <- filter(prox_20mins, connection_min_distance > 1200 & connection_min_distance <= 1600) %>% 
+  dplyr::group_by(name)%>%
+  dplyr::summarise(twenty_min_area = sum(grid_area),count_20m =n())%>%
+  st_drop_geometry()
+
+
+#area of land (m2) per borough that within 25 mins walk
+prox_25mins <- London_final_dataset
+prox_25mins <- filter(prox_25mins, connection_min_distance > 1600 & connection_min_distance <= 2000) %>% 
+  dplyr::group_by(name)%>%
+  dplyr::summarise(twenty_five_min_area = sum(grid_area),count_25m =n())%>%
+  st_drop_geometry()
+
+
+#area of land (m2) more than 25 mins walk
+prox_25_plus <- London_final_dataset
+prox_25_plus <- filter(prox_25_plus, connection_min_distance > 2000) %>% 
+  dplyr::group_by(name)%>%
+  dplyr::summarise(twenty_five_plus_area = sum(grid_area),count_25_plus= n())%>%
+  st_drop_geometry()
+
+
+#join them together
+proximity_areas_borough <- list(prox_5mins, prox_10mins, prox_15mins,prox_20mins,prox_25mins, prox_25_plus) %>%
+  imap(function(x, y) x %>% rename_with(~paste(., y, sep = '_'), -name)) %>%
+  reduce(inner_join, by = 'name')
+
+#join proximity_areas_borough open_space_borough
+proximity_areas_borough_os <- proximity_areas_borough %>%
+  left_join(.,
+            open_space_borough,
+            by =c("name" = "borough_name"), .keep_all = TRUE)
+
+#write out
+#write.csv(proximity_areas_borough_os, ".\\Output_data\\datasets\\Proximity_areas_borough.csv")
+
+
+#------------by Ward-----------------------
+
+
+#area of land (m2) per borough that within 5 mins walk
+prox_5mins <- London_final_dataset%>%
+  filter(connection_min_distance <= 401) %>% 
+  dplyr::group_by(gss_code)%>%
+  dplyr::summarise(five_min_area = sum(grid_area), count_5m =n())%>%  
+  st_drop_geometry()
+
+#area of land (m2) per borough that within 10 mins walk
+prox_10mins <- London_final_dataset
+prox_10mins <- filter(prox_10mins, connection_min_distance > 400 & connection_min_distance <= 800) %>% 
+  dplyr::group_by(gss_code)%>%
+  dplyr::summarise(ten_min_area = sum(grid_area), count_10m =n())%>%
+  st_drop_geometry()
+
+
+#area of land (m2) per borough that within 15 mins walk
+prox_15mins <- London_final_dataset
+prox_15mins <- filter(prox_15mins, connection_min_distance >800 & connection_min_distance <= 1200) %>% 
+  dplyr::group_by(gss_code)%>%
+  dplyr::summarise(fifteen_min_area = sum(grid_area),count_15m =n())%>%
+  st_drop_geometry()
+
+
+#area of land (m2) per borough that within 20 mins walk
+prox_20mins <- London_final_dataset
+prox_20mins <- filter(prox_20mins, connection_min_distance > 1200 & connection_min_distance <= 1600) %>% 
+  dplyr::group_by(gss_code)%>%
+  dplyr::summarise(twenty_min_area = sum(grid_area), count_20m =n())%>%
+  st_drop_geometry()
+
+
+#area of land (m2) per borough that within 25 mins walk
+prox_25mins <- London_final_dataset
+prox_25mins <- filter(prox_25mins, connection_min_distance > 1600 & connection_min_distance <= 2000) %>% 
+  dplyr::group_by(gss_code)%>%
+  dplyr::summarise(twenty_five_min_area = sum(grid_area), count_25m =n())%>%
+  st_drop_geometry()
+
+
+#area of land (m2) more than 25 mins walk
+prox_25_plus <- London_final_dataset
+prox_25_plus <- filter(prox_25_plus, connection_min_distance > 2000) %>% 
+  dplyr::group_by(gss_code)%>%
+  dplyr::summarise(twenty_five_plus_area = sum(grid_area), count_25_plus =n())%>%
+  st_drop_geometry()
+
+#-------join them together-------------
+
+j1_w <- full_join(prox_5mins,prox_10mins, by= "gss_code")
+
+j2_w <-  full_join(j1_w,prox_15mins, by= "gss_code")
+
+j3_w <-  full_join(j2_w,prox_20mins, by= "gss_code")
+
+j4_w <-  full_join(j3_w,prox_25mins, by= "gss_code")
+
+proximity_areas_ward  <-  full_join(j4_w,prox_25_plus, by= "gss_code")
+
+
+#open_space_wards
+#join proximity_areas_ward open_space_wards
+proximity_areas_wards_os <- proximity_areas_ward %>%
+  left_join(.,
+            open_space_wards,
+            by =c("gss_code" = "ward_gss_code"))
+
+
+proximity_areas_wards_os <-  proximity_areas_wards_os%>%
+  rename(os_area=all_open_space)%>%
+  rename(borough_area= total_area_of_ward_sq_m)
+
+
+
+
+#write out
+#write.csv(proximity_areas_wards_os, ".\\Output_data\\datasets\\Proximity_areas_ward.csv")
+
+
+
+```
+
+## Population per ward/borough 
+```{r}
+#by ward
+population_war <- read.csv(here::here("Data","population_ward_borough","housing-density-ward.csv"))%>%
+  clean_names()%>%
+  filter(year == "2022")
+
+#write.csv(population_war, ".\\Output_data\\datasets\\population_war.csv")
+
+
+#by borough
+population_bo <- population_war %>%
+  group_by(borough)%>%
+  summarise(population_per_square_kilometre = sum(population_per_square_kilometre),population_per_hectare =sum(population_per_hectare),hectares =sum(hectares), population = sum(population) )
+
+#write.csv(population_bo, ".\\Output_data\\datasets\\population_bo.csv")
+
+```
+
+## Join population, proximity and diversity together
+
+```{r}
+#-------------wards---------------------------
+
+#join population_war (624: missing data in city of london) with proximity_areas_wards_os (649) and median_no_services_ward (649)
+
+#prox and diversity
+wards_join <- proximity_areas_wards_os %>%
+  left_join(.,
+            median_no_services_ward, 
+            by = c ("gss_code"="gss_code"))
+
+#join to population
+wards_join2 <- wards_join %>%
+  left_join(.,
+            population_war,
+            by = c("gss_code" = "code"))
+
+#write out
+st_write(wards_join2,".\\Output_data\\datasets\\three_measures_w.csv",  delete_dsn = T)
+
+
+#-------------borough---------------------------
+
+
+
+#prox and diversity
+borough_join <- proximity_areas_borough_os %>%
+  left_join(.,
+            median_no_services, 
+            by = c ("name"="name"))
+
+#join to population (missing city of london)
+borough_join2 <- borough_join %>%
+  left_join(.,
+            population_bo,
+            by = c("name"="borough"))
+
+#write out
+st_write(borough_join2,".\\Output_data\\datasets\\three_measures_b.csv",  delete_dsn = T)
+         
+      
+
+```
+
+
