@@ -118,7 +118,7 @@ street_nodes <-  street_nodes[london_boundary,]
 #-----------------lsoa population ----------------------
 
 #load lsoa data
-lsoa <- st_read(here::here("Data","population_lsoa","Lower_Layer_Super_Output_Areas_(December_2011)_Boundaries_Generalised_Clipped_(BGC)_EW_V3", "Lower_Layer_Super_Output_Areas_(December_2011)_Boundaries_Generalised_Clipped_(BGC)_EW_V3.shp"))
+lsoa <- st_read(here::here("Data","population_lsoa","Lower_Layer_Super_Output_Areas", "Lower_Layer_Super_Output_Areas_(December_2011)_Boundaries_Generalised_Clipped_(BGC)_EW_V3.shp"))
 
 #-----lsoa-----
 
